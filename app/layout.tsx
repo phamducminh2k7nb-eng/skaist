@@ -1,9 +1,10 @@
 import './globals.css';
+import './batch.css';
 import type { Metadata } from 'next';
 
 export const metadata: Metadata = {
   title: 'MOVA AI Studio',
-  description: 'Turn a character image into motion using a reference dance video.'
+  description: 'Turn character images into motion videos using reference dance videos.'
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
