@@ -1,8 +1,8 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { fal } from '@fal-ai/client';
-import { Video, Image as ImageIcon, WandSparkles, History, Settings, Download, RotateCcw, Sparkles, Layers3, CheckCircle2, AlertCircle } from 'lucide-react';
+import { Video, Image as ImageIcon, WandSparkles, Settings, Download, RotateCcw, Sparkles, Layers3, CheckCircle2, AlertCircle, PlayCircle } from 'lucide-react';
 
 fal.config({ proxyUrl: '/api/fal/proxy' });
 
@@ -28,6 +28,7 @@ function friendlyError(error: unknown) {
   if (lower.includes('401') || lower.includes('unauthorized') || lower.includes('invalid key')) return 'FAL_KEY chưa đúng hoặc chưa được áp dụng trên Vercel Production.';
   if (lower.includes('402') || lower.includes('balance') || lower.includes('credit') || lower.includes('payment')) return 'Tài khoản fal.ai không đủ credit để chạy model.';
   if (lower.includes('429') || lower.includes('rate limit')) return 'fal.ai đang giới hạn tốc độ. Hãy thử lại sau ít phút.';
+  if (lower.includes('safety') || lower.includes('nsfw') || lower.includes('moderation')) return 'Ảnh hoặc video bị bộ lọc an toàn từ chối.';
   if (lower.includes('413') || lower.includes('too large')) return 'File quá lớn để tải lên.';
   if (lower.includes('fetch') || lower.includes('network')) return 'Kết nối đến dịch vụ AI thất bại. Hãy thử lại.';
   return raw;
@@ -40,9 +41,15 @@ export default function Home() {
   const [jobs, setJobs] = useState<BatchJob[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const imageInputRef = useRef<HTMLInputElement>(null);
+  const videoInputRef = useRef<HTMLInputElement>(null);
 
   const imagePreview = useMemo(() => images[0] ? URL.createObjectURL(images[0]) : '', [images]);
   const videoPreview = useMemo(() => videos[0] ? URL.createObjectURL(videos[0]) : '', [videos]);
+
+  function scrollTo(id: string) {
+    document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
 
   function createPairs() {
     if (!images.length || !videos.length) return [] as { image: File; video: File; label: string }[];
@@ -150,7 +157,6 @@ export default function Home() {
     try {
       const pairs = createPairs();
       if (!pairs.length) throw new Error('Hãy chọn ít nhất 1 ảnh nhân vật và 1 video điệu nhảy.');
-
       for (const file of images) if (file.size > 20 * 1024 * 1024) throw new Error(`Ảnh ${file.name} vượt quá 20 MB.`);
       for (const file of videos) if (file.size > 100 * 1024 * 1024) throw new Error(`Video ${file.name} vượt quá 100 MB.`);
 
@@ -166,7 +172,6 @@ export default function Home() {
       setJobs(initialJobs);
       setLoading(true);
 
-      // Chạy tối đa 2 job một lúc để giảm lỗi quota/rate-limit nhưng vẫn giữ batch processing.
       for (let i = 0; i < pairs.length; i += 2) {
         const chunk = pairs.slice(i, i + 2);
         await Promise.allSettled(chunk.map((pair, offset) => {
@@ -176,6 +181,24 @@ export default function Home() {
       }
     } catch (e) {
       setError(friendlyError(e));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function retryJob(job: BatchJob) {
+    if (loading) return;
+    const index = jobs.findIndex(j => j.id === job.id);
+    if (index < 0) return;
+    const pairs = createPairs();
+    const pair = pairs[index];
+    if (!pair) {
+      setError('Không tìm thấy file gốc cho job này. Hãy chọn lại ảnh/video rồi Generate.');
+      return;
+    }
+    setLoading(true);
+    try {
+      await processPair(job.id, pair.image, pair.video, resolution);
     } finally {
       setLoading(false);
     }
@@ -199,37 +222,32 @@ export default function Home() {
 
     <div className="layout">
       <aside className="sidebar">
-        <div className="navitem active"><WandSparkles size={18}/> Create</div>
-        <div className="navitem"><Layers3 size={18}/> Batch</div>
-        <div className="navitem"><History size={18}/> History</div>
-        <div className="navitem"><Settings size={18}/> Settings</div>
+        <button type="button" className="navitem active navbutton" onClick={() => scrollTo('create-section')}><WandSparkles size={18}/> Create</button>
+        <button type="button" className="navitem navbutton" onClick={() => scrollTo('batch-section')}><Layers3 size={18}/> Batch</button>
+        <button type="button" className="navitem navbutton" onClick={() => scrollTo('batch-section')}><PlayCircle size={18}/> Results</button>
+        <button type="button" className="navitem navbutton" onClick={() => scrollTo('settings-section')}><Settings size={18}/> Settings</button>
         <div className="sectionlabel">Workflow</div>
-        <div className="navitem"><ImageIcon size={18}/> Character</div>
-        <div className="navitem"><Video size={18}/> Motion</div>
+        <button type="button" className="navitem navbutton" onClick={() => imageInputRef.current?.click()}><ImageIcon size={18}/> Character</button>
+        <button type="button" className="navitem navbutton" onClick={() => videoInputRef.current?.click()}><Video size={18}/> Motion</button>
       </aside>
 
       <main className="main">
         <section className="hero">
-          <div>
-            <div className="eyebrow">Motion Copy Studio</div>
-            <h1>Copy the dance. Keep the character.</h1>
-            <p>Chọn ảnh nhân vật và video mẫu. Hệ thống chuyển chuyển động từ video sang nhân vật và có thể xử lý nhiều file theo batch.</p>
-          </div>
+          <div><div className="eyebrow">Motion Copy Studio</div><h1>Copy the dance. Keep the character.</h1><p>Chọn ảnh nhân vật và video mẫu. Hệ thống chuyển chuyển động từ video sang nhân vật và có thể xử lý nhiều file theo batch.</p></div>
           <div className="badge">Batch · 720p / 2K / 4K</div>
         </section>
 
-        <section className="workspace">
+        <section className="workspace" id="create-section">
           <div className="canvas">
             <div className="canvas-head"><h2>Input files</h2><div className="step">MULTI FILE</div></div>
 
             <div className="upload-grid">
               <label className="drop">
-                <input type="file" multiple accept="image/png,image/jpeg,image/webp" onChange={e => { setImages(Array.from(e.target.files || [])); setError(''); }}/>
+                <input ref={imageInputRef} id="image-upload" type="file" multiple accept="image/png,image/jpeg,image/webp" onChange={e => { setImages(Array.from(e.target.files || [])); setError(''); }}/>
                 {imagePreview ? <div className="preview-wrap"><img className="drop-preview" src={imagePreview} alt="character preview"/><div className="file-count">{images.length} ảnh đã chọn</div></div> : <div><div className="upload-icon"><ImageIcon/></div><h3>Character image(s)</h3><p>Chọn 1 hoặc nhiều ảnh cùng lúc</p></div>}
               </label>
-
               <label className="drop">
-                <input type="file" multiple accept="video/mp4,video/quicktime,video/webm" onChange={e => { setVideos(Array.from(e.target.files || [])); setError(''); }}/>
+                <input ref={videoInputRef} id="video-upload" type="file" multiple accept="video/mp4,video/quicktime,video/webm" onChange={e => { setVideos(Array.from(e.target.files || [])); setError(''); }}/>
                 {videoPreview ? <div className="preview-wrap"><video className="drop-preview" src={videoPreview} muted playsInline/><div className="file-count">{videos.length} video đã chọn</div></div> : <div><div className="upload-icon"><Video/></div><h3>Dance video(s)</h3><p>Chọn 1 hoặc nhiều video cùng lúc</p></div>}
               </label>
             </div>
@@ -237,21 +255,18 @@ export default function Home() {
             <div className="resolution-block">
               <div><strong>Output quality</strong><span>720p trực tiếp · 2K/4K upscale sau khi tạo</span></div>
               <div className="resolution-tabs">
-                {(['720p','2k','4k'] as Resolution[]).map(r => <button key={r} className={resolution === r ? 'resolution active' : 'resolution'} onClick={() => setResolution(r)}>{r === '2k' ? '2K' : r === '4k' ? '4K' : '720p'}</button>)}
+                {(['720p','2k','4k'] as Resolution[]).map(r => <button type="button" key={r} className={resolution === r ? 'resolution active' : 'resolution'} onClick={(e) => { e.preventDefault(); e.stopPropagation(); setResolution(r); }}>{r === '2k' ? '2K' : r === '4k' ? '4K' : '720p'}</button>)}
               </div>
             </div>
 
-            <div className="actions">
-              <button className="generate" onClick={generate} disabled={loading}>
-                <WandSparkles size={17} style={{verticalAlign:'middle', marginRight:8}}/>
-                {loading ? `Processing ${jobs.length} file(s)...` : `Generate${Math.max(images.length, videos.length) > 1 ? ' batch' : ' video'}`}
-              </button>
-              <button className="secondary" onClick={reset} title="Reset"><RotateCcw size={18}/></button>
+            <div className="actions clickable-actions">
+              <button type="button" className="generate" onClick={generate} disabled={loading}><WandSparkles size={17} style={{verticalAlign:'middle', marginRight:8}}/>{loading ? `Processing ${jobs.length} file(s)...` : `Generate${Math.max(images.length, videos.length) > 1 ? ' batch' : ' video'}`}</button>
+              <button type="button" className="secondary" onClick={reset} title="Reset"><RotateCcw size={18}/></button>
             </div>
 
             {error && <div className="error">{error}</div>}
 
-            {jobs.length > 0 && <div className="batch-results">
+            {jobs.length > 0 && <div className="batch-results" id="batch-section">
               <div className="batch-head"><h2>Batch progress</h2><span>{completed}/{jobs.length} completed</span></div>
               <div className="job-grid">
                 {jobs.map(job => <div className="job-card" key={job.id}>
@@ -259,17 +274,15 @@ export default function Home() {
                   <div className="job-status">{job.status === 'waiting' ? 'Waiting' : job.status === 'uploading' ? 'Uploading files' : job.status === 'motion' ? 'Copying motion' : job.status === 'upscale' ? `Upscaling to ${resolution.toUpperCase()}` : job.status === 'done' ? 'Complete' : 'Failed'}</div>
                   <div className="progressbar"><div className="progressfill" style={{width:`${job.progress}%`}}/></div>
                   {job.error && <div className="job-error">{job.error}</div>}
+                  {job.status === 'error' && <button type="button" className="retry-btn" onClick={() => retryJob(job)} disabled={loading}>Retry</button>}
                   {job.warning && <div className="job-warning">{job.warning}</div>}
-                  {job.resultUrl && <>
-                    <video className="job-video" src={job.resultUrl} controls playsInline/>
-                    <a className="download-btn" href={job.resultUrl} target="_blank" rel="noreferrer"><Download size={15}/> Open / Download result</a>
-                  </>}
+                  {job.resultUrl && <><video className="job-video" src={job.resultUrl} controls playsInline/><a className="download-btn" href={job.resultUrl} target="_blank" rel="noreferrer"><Download size={15}/> Open / Download result</a></>}
                 </div>)}
               </div>
             </div>}
           </div>
 
-          <aside className="settings compact-settings">
+          <aside className="settings compact-settings" id="settings-section">
             <h2>Generation</h2>
             <div className="stat-card"><span>Motion mode</span><strong>Direct copy</strong></div>
             <div className="stat-card"><span>Identity</span><strong>Stable</strong></div>
