@@ -1,7 +1,10 @@
 'use client';
 
-import { useMemo, useRef, useState } from 'react';
-import { Upload, Video, Image as ImageIcon, WandSparkles, History, Settings, Download, RotateCcw, Sparkles } from 'lucide-react';
+import { useMemo, useState } from 'react';
+import { fal } from '@fal-ai/client';
+import { Video, Image as ImageIcon, WandSparkles, History, Settings, Download, RotateCcw, Sparkles } from 'lucide-react';
+
+fal.config({ proxyUrl: '/api/fal/proxy' });
 
 export default function Home() {
   const [image, setImage] = useState<File | null>(null);
@@ -22,31 +25,62 @@ export default function Home() {
       setError('Hãy tải đủ 1 ảnh nhân vật và 1 video chuyển động.');
       return;
     }
+    if (image.size > 20 * 1024 * 1024) {
+      setError('Ảnh vượt quá 20 MB.');
+      return;
+    }
+    if (video.size > 100 * 1024 * 1024) {
+      setError('Video vượt quá 100 MB.');
+      return;
+    }
+
     setError('');
     setResultUrl('');
     setProgress(8);
     setStatus('Uploading assets');
+
     try {
-      const form = new FormData();
-      form.append('image', image);
-      form.append('video', video);
-      form.append('prompt', prompt);
-      form.append('adaptMotion', String(adaptMotion));
-      form.append('enhanceIdentity', String(enhanceIdentity));
-      setProgress(20);
+      const [imageRemoteUrl, videoRemoteUrl] = await Promise.all([
+        fal.storage.upload(image),
+        fal.storage.upload(video)
+      ]);
+
+      setProgress(28);
       setStatus('Analyzing motion');
-      const res = await fetch('/api/generate', { method: 'POST', body: form });
-      setProgress(72);
-      setStatus('Rendering video');
-      const data = await res.json();
-      if (!res.ok) throw new Error(data?.error || 'Generation failed');
-      setResultUrl(data.videoUrl);
+
+      const result = await fal.subscribe('fal-ai/wan-motion', {
+        input: {
+          image_url: imageRemoteUrl,
+          video_url: videoRemoteUrl,
+          prompt,
+          acceleration: 'regular',
+          adapt_motion: adaptMotion,
+          enhance_identity: enhanceIdentity,
+          enable_safety_checker: true
+        },
+        logs: true,
+        onQueueUpdate(update) {
+          if (update.status === 'IN_QUEUE') {
+            setProgress(38);
+            setStatus('Queued for AI');
+          }
+          if (update.status === 'IN_PROGRESS') {
+            setProgress(p => Math.max(p, 62));
+            setStatus('Rendering motion');
+          }
+        }
+      });
+
+      const data = result.data as { video?: { url?: string } };
+      if (!data.video?.url) throw new Error('AI engine did not return a video.');
+
+      setResultUrl(data.video.url);
       setProgress(100);
       setStatus('Complete');
     } catch (e) {
       setProgress(0);
       setStatus('Ready');
-      setError(e instanceof Error ? e.message : 'Có lỗi xảy ra.');
+      setError(e instanceof Error ? e.message : 'Có lỗi xảy ra khi tạo video.');
     }
   }
 
@@ -57,7 +91,7 @@ export default function Home() {
   return <div className="shell">
     <header className="topbar">
       <div className="brand"><div className="brandmark"><Sparkles size={19}/></div><div>MOVA<small>Motion AI Studio</small></div></div>
-      <div className="status"><div className="dot"/><span>AI engine {process.env.NEXT_PUBLIC_MOCK_MODE === 'true' ? 'demo' : 'ready'}</span></div>
+      <div className="status"><div className="dot"/><span>Wan Motion ready</span></div>
     </header>
     <div className="layout">
       <aside className="sidebar">
@@ -71,7 +105,7 @@ export default function Home() {
       <main className="main">
         <section className="hero">
           <div><div className="eyebrow">Photo → Motion</div><h1>Turn any character photo into a dance video.</h1><p>Tải một ảnh nhân vật và một video điệu nhảy. MOVA dùng video làm driving motion rồi chuyển chuyển động sang nhân vật trong ảnh.</p></div>
-          <div className="badge">Wan Motion workflow</div>
+          <div className="badge">Wan Motion · 720p</div>
         </section>
         <section className="workspace">
           <div className="canvas">
@@ -101,9 +135,9 @@ export default function Home() {
             <div className="sectionlabel">Motion controls</div>
             <div className="row"><div><strong>Adapt motion</strong><span>Retarget chuyển động theo tỷ lệ nhân vật</span></div><button className={`switch ${adaptMotion?'on':''}`} onClick={()=>setAdaptMotion(v=>!v)}><div className="knob"/></button></div>
             <div className="row"><div><strong>Enhance identity</strong><span>Ưu tiên giữ mặt và đặc điểm nhân vật</span></div><button className={`switch ${enhanceIdentity?'on':''}`} onClick={()=>setEnhanceIdentity(v=>!v)}><div className="knob"/></button></div>
-            <div className="sectionlabel">Output preset</div>
-            <select className="select" defaultValue="9:16"><option>9:16 · TikTok / Reels</option><option disabled>16:9 · Coming later</option><option disabled>1:1 · Coming later</option></select>
-            <p className="hint">Bản đầu chỉ hiển thị các điều khiển có thể nối thật với engine. Các nút chưa được API hỗ trợ sẽ không giả lập.</p>
+            <div className="sectionlabel">Output</div>
+            <select className="select" value="720p" readOnly><option value="720p">720p · Wan Motion optimized</option></select>
+            <p className="hint">Wan Motion nhận video làm driving motion, tự retarget pose và xuất video 720p. Bản này không tạo nút giả cho các tùy chọn engine chưa hỗ trợ.</p>
             <div className="sectionlabel">Color system</div>
             <div className="colors">
               <div className="swatch" style={{background:'#070A12'}}>#070A12</div>
