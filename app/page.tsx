@@ -136,7 +136,7 @@ export default function Home() {
             <div className="row"><div><strong>Adapt motion</strong><span>Retarget chuyển động theo tỷ lệ nhân vật</span></div><button className={`switch ${adaptMotion?'on':''}`} onClick={()=>setAdaptMotion(v=>!v)}><div className="knob"/></button></div>
             <div className="row"><div><strong>Enhance identity</strong><span>Ưu tiên giữ mặt và đặc điểm nhân vật</span></div><button className={`switch ${enhanceIdentity?'on':''}`} onClick={()=>setEnhanceIdentity(v=>!v)}><div className="knob"/></button></div>
             <div className="sectionlabel">Output</div>
-            <select className="select" value="720p" readOnly><option value="720p">720p · Wan Motion optimized</option></select>
+            <select className="select" value="720p" disabled><option value="720p">720p · Wan Motion optimized</option></select>
             <p className="hint">Wan Motion nhận video làm driving motion, tự retarget pose và xuất video 720p. Bản này không tạo nút giả cho các tùy chọn engine chưa hỗ trợ.</p>
             <div className="sectionlabel">Color system</div>
             <div className="colors">
