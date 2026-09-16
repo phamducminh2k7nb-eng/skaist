@@ -2,111 +2,173 @@
 
 import { useMemo, useState } from 'react';
 import { fal } from '@fal-ai/client';
-import { Video, Image as ImageIcon, WandSparkles, History, Settings, Download, RotateCcw, Sparkles } from 'lucide-react';
+import { Video, Image as ImageIcon, WandSparkles, History, Settings, Download, RotateCcw, Sparkles, Layers3, CheckCircle2, AlertCircle } from 'lucide-react';
 
 fal.config({ proxyUrl: '/api/fal/proxy' });
 
+type Resolution = '720p' | '2k' | '4k';
+type JobState = 'waiting' | 'motion' | 'upscale' | 'done' | 'error';
+
+type BatchJob = {
+  id: string;
+  label: string;
+  imageName: string;
+  videoName: string;
+  status: JobState;
+  progress: number;
+  resultUrl?: string;
+  error?: string;
+};
+
 export default function Home() {
-  const [image, setImage] = useState<File | null>(null);
-  const [video, setVideo] = useState<File | null>(null);
-  const [prompt, setPrompt] = useState('Keep the character identity and outfit consistent. Reproduce the reference dance motion naturally with stable limbs and realistic body movement.');
-  const [adaptMotion, setAdaptMotion] = useState(true);
-  const [enhanceIdentity, setEnhanceIdentity] = useState(true);
-  const [status, setStatus] = useState('Ready');
-  const [progress, setProgress] = useState(0);
+  const [images, setImages] = useState<File[]>([]);
+  const [videos, setVideos] = useState<File[]>([]);
+  const [resolution, setResolution] = useState<Resolution>('720p');
+  const [jobs, setJobs] = useState<BatchJob[]>([]);
   const [loading, setLoading] = useState(false);
-  const [resultUrl, setResultUrl] = useState('');
   const [error, setError] = useState('');
 
-  const imageUrl = useMemo(() => image ? URL.createObjectURL(image) : '', [image]);
-  const videoUrl = useMemo(() => video ? URL.createObjectURL(video) : '', [video]);
+  const imagePreview = useMemo(() => images[0] ? URL.createObjectURL(images[0]) : '', [images]);
+  const videoPreview = useMemo(() => videos[0] ? URL.createObjectURL(videos[0]) : '', [videos]);
 
-  async function generate() {
-    if (loading) return;
+  function createPairs() {
+    if (!images.length || !videos.length) return [] as { image: File; video: File; label: string }[];
 
-    if (!image || !video) {
-      setError('Hãy tải đủ 1 ảnh nhân vật và 1 video chuyển động trước khi tạo.');
-      return;
-    }
-    if (image.size > 20 * 1024 * 1024) {
-      setError('Ảnh vượt quá 20 MB. Hãy chọn ảnh nhỏ hơn.');
-      return;
-    }
-    if (video.size > 100 * 1024 * 1024) {
-      setError('Video vượt quá 100 MB. Hãy chọn video ngắn hoặc nén nhỏ hơn.');
-      return;
+    if (images.length > 1 && videos.length > 1 && images.length !== videos.length) {
+      throw new Error('Nếu chọn nhiều ảnh và nhiều video thì số lượng phải bằng nhau. Hoặc chỉ chọn 1 ảnh để dùng cho nhiều video / 1 video để dùng cho nhiều ảnh.');
     }
 
-    setLoading(true);
-    setError('');
-    setResultUrl('');
-    setProgress(10);
-    setStatus('Uploading image and video');
+    const count = Math.max(images.length, videos.length);
+    return Array.from({ length: count }, (_, i) => ({
+      image: images.length === 1 ? images[0] : images[i],
+      video: videos.length === 1 ? videos[0] : videos[i],
+      label: `Video ${i + 1}`
+    }));
+  }
 
+  function updateJob(id: string, patch: Partial<BatchJob>) {
+    setJobs(current => current.map(job => job.id === id ? { ...job, ...patch } : job));
+  }
+
+  async function processPair(id: string, image: File, video: File) {
     try {
-      setProgress(25);
-      setStatus('Submitting to Wan Motion');
+      updateJob(id, { status: 'motion', progress: 15 });
 
-      const result = await fal.subscribe('fal-ai/wan-motion', {
+      const motionResult = await fal.subscribe('fal-ai/wan-motion', {
         input: {
           image_url: image as any,
           video_url: video as any,
-          prompt,
+          prompt: '',
           acceleration: 'regular',
-          adapt_motion: adaptMotion,
-          enhance_identity: enhanceIdentity,
+          adapt_motion: false,
+          enhance_identity: true,
           enable_safety_checker: true
         },
         logs: true,
         onQueueUpdate(update) {
-          if (update.status === 'IN_QUEUE') {
-            setProgress(40);
-            setStatus('Waiting in AI queue');
-          }
-          if (update.status === 'IN_PROGRESS') {
-            setProgress(70);
-            setStatus('AI is transferring the dance motion');
-          }
+          if (update.status === 'IN_QUEUE') updateJob(id, { status: 'motion', progress: 28 });
+          if (update.status === 'IN_PROGRESS') updateJob(id, { status: 'motion', progress: 58 });
         }
       });
 
-      const data = result.data as { video?: { url?: string } };
-      if (!data?.video?.url) {
-        throw new Error('fal.ai hoàn tất nhưng không trả về video. Hãy thử lại với video ngắn hơn.');
+      const motionData = motionResult.data as { video?: { url?: string } };
+      const motionUrl = motionData?.video?.url;
+      if (!motionUrl) throw new Error('Wan Motion không trả về video.');
+
+      if (resolution === '720p') {
+        updateJob(id, { status: 'done', progress: 100, resultUrl: motionUrl });
+        return;
       }
 
-      setResultUrl(data.video.url);
-      setProgress(100);
-      setStatus('Complete');
+      updateJob(id, { status: 'upscale', progress: 72 });
+
+      const upscaleResult = await fal.subscribe('fal-ai/bytedance-upscaler/upscale/video', {
+        input: {
+          video_url: motionUrl,
+          target_resolution: resolution,
+          target_fps: '30fps',
+          enhancement_preset: 'aigc',
+          enhancement_tier: 'standard',
+          fidelity: 'high'
+        },
+        logs: true,
+        onQueueUpdate(update) {
+          if (update.status === 'IN_QUEUE') updateJob(id, { status: 'upscale', progress: 78 });
+          if (update.status === 'IN_PROGRESS') updateJob(id, { status: 'upscale', progress: 90 });
+        }
+      });
+
+      const upscaleData = upscaleResult.data as { video?: { url?: string } };
+      const finalUrl = upscaleData?.video?.url;
+      if (!finalUrl) throw new Error('Upscaler không trả về video.');
+
+      updateJob(id, { status: 'done', progress: 100, resultUrl: finalUrl });
     } catch (e) {
-      const message = e instanceof Error ? e.message : 'Có lỗi xảy ra khi tạo video.';
-      setProgress(0);
-      setStatus('Ready');
-      setError(`Không tạo được video: ${message}`);
+      updateJob(id, {
+        status: 'error',
+        progress: 0,
+        error: e instanceof Error ? e.message : 'Không tạo được video.'
+      });
+    }
+  }
+
+  async function generate() {
+    if (loading) return;
+    setError('');
+
+    try {
+      const pairs = createPairs();
+      if (!pairs.length) throw new Error('Hãy chọn ít nhất 1 ảnh nhân vật và 1 video điệu nhảy.');
+
+      for (const file of images) {
+        if (file.size > 20 * 1024 * 1024) throw new Error(`Ảnh ${file.name} vượt quá 20 MB.`);
+      }
+      for (const file of videos) {
+        if (file.size > 100 * 1024 * 1024) throw new Error(`Video ${file.name} vượt quá 100 MB.`);
+      }
+
+      const initialJobs: BatchJob[] = pairs.map((pair, i) => ({
+        id: `${Date.now()}-${i}`,
+        label: pair.label,
+        imageName: pair.image.name,
+        videoName: pair.video.name,
+        status: 'waiting',
+        progress: 4
+      }));
+
+      setJobs(initialJobs);
+      setLoading(true);
+
+      await Promise.allSettled(
+        pairs.map((pair, i) => processPair(initialJobs[i].id, pair.image, pair.video))
+      );
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Có lỗi xảy ra.');
     } finally {
       setLoading(false);
     }
   }
 
   function reset() {
-    setImage(null);
-    setVideo(null);
-    setResultUrl('');
+    setImages([]);
+    setVideos([]);
+    setJobs([]);
     setError('');
-    setProgress(0);
-    setStatus('Ready');
     setLoading(false);
   }
+
+  const completed = jobs.filter(j => j.status === 'done').length;
 
   return <div className="shell">
     <header className="topbar">
       <div className="brand"><div className="brandmark"><Sparkles size={19}/></div><div>MOVA<small>Motion AI Studio</small></div></div>
-      <div className="status"><div className="dot"/><span>Wan Motion ready</span></div>
+      <div className="status"><div className="dot"/><span>Motion engine online</span></div>
     </header>
 
     <div className="layout">
       <aside className="sidebar">
         <div className="navitem active"><WandSparkles size={18}/> Create</div>
+        <div className="navitem"><Layers3 size={18}/> Batch</div>
         <div className="navitem"><History size={18}/> History</div>
         <div className="navitem"><Settings size={18}/> Settings</div>
         <div className="sectionlabel">Workflow</div>
@@ -117,67 +179,69 @@ export default function Home() {
       <main className="main">
         <section className="hero">
           <div>
-            <div className="eyebrow">Photo → Motion</div>
-            <h1>Turn any character photo into a dance video.</h1>
-            <p>Tải một ảnh nhân vật và một video điệu nhảy. MOVA dùng video làm driving motion rồi chuyển chuyển động sang nhân vật trong ảnh.</p>
+            <div className="eyebrow">Motion Copy Studio</div>
+            <h1>Copy the dance. Keep the character.</h1>
+            <p>Chọn ảnh nhân vật và video mẫu. Hệ thống chuyển trực tiếp chuyển động từ video sang nhân vật và có thể xử lý nhiều file song song.</p>
           </div>
-          <div className="badge">Wan Motion · 720p</div>
+          <div className="badge">Batch · 720p / 2K / 4K</div>
         </section>
 
         <section className="workspace">
           <div className="canvas">
-            <div className="canvas-head"><h2>Create motion video</h2><div className="step">01 / INPUT</div></div>
+            <div className="canvas-head"><h2>Input files</h2><div className="step">MULTI FILE</div></div>
 
             <div className="upload-grid">
               <label className="drop">
-                <input type="file" accept="image/png,image/jpeg,image/webp" onChange={e => { setImage(e.target.files?.[0] || null); setError(''); }}/>
-                {imageUrl ? <img className="drop-preview" src={imageUrl} alt="character preview"/> : <div><div className="upload-icon"><ImageIcon/></div><h3>Character image</h3><p>JPG, PNG, WEBP<br/>Nên dùng ảnh toàn thân, rõ mặt và tay chân</p></div>}
+                <input type="file" multiple accept="image/png,image/jpeg,image/webp" onChange={e => { setImages(Array.from(e.target.files || [])); setError(''); }}/>
+                {imagePreview ? <div className="preview-wrap"><img className="drop-preview" src={imagePreview} alt="character preview"/><div className="file-count">{images.length} ảnh đã chọn</div></div> : <div><div className="upload-icon"><ImageIcon/></div><h3>Character image(s)</h3><p>Chọn 1 hoặc nhiều ảnh cùng lúc</p></div>}
               </label>
 
               <label className="drop">
-                <input type="file" accept="video/mp4,video/quicktime,video/webm" onChange={e => { setVideo(e.target.files?.[0] || null); setError(''); }}/>
-                {videoUrl ? <video className="drop-preview" src={videoUrl} controls muted playsInline/> : <div><div className="upload-icon"><Video/></div><h3>Motion reference</h3><p>MP4, MOV, WEBM<br/>Video có người nhảy rõ toàn thân sẽ tốt nhất</p></div>}
+                <input type="file" multiple accept="video/mp4,video/quicktime,video/webm" onChange={e => { setVideos(Array.from(e.target.files || [])); setError(''); }}/>
+                {videoPreview ? <div className="preview-wrap"><video className="drop-preview" src={videoPreview} muted playsInline/><div className="file-count">{videos.length} video đã chọn</div></div> : <div><div className="upload-icon"><Video/></div><h3>Dance video(s)</h3><p>Chọn 1 hoặc nhiều video cùng lúc</p></div>}
               </label>
             </div>
 
-            <div className="swapline"><div className="line"/> IMAGE + MOTION → AI VIDEO <div className="line"/></div>
-            <textarea className="prompt" value={prompt} onChange={e => setPrompt(e.target.value)} />
+            <div className="resolution-block">
+              <div><strong>Output quality</strong><span>720p tạo trực tiếp · 2K/4K upscale sau khi tạo</span></div>
+              <div className="resolution-tabs">
+                {(['720p','2k','4k'] as Resolution[]).map(r => <button key={r} className={resolution === r ? 'resolution active' : 'resolution'} onClick={() => setResolution(r)}>{r === '2k' ? '2K' : r === '4k' ? '4K' : '720p'}</button>)}
+              </div>
+            </div>
 
             <div className="actions">
               <button className="generate" onClick={generate} disabled={loading}>
                 <WandSparkles size={17} style={{verticalAlign:'middle', marginRight:8}}/>
-                {loading ? status : 'Generate video'}
+                {loading ? `Processing ${jobs.length} file(s)...` : `Generate${Math.max(images.length, videos.length) > 1 ? ' batch' : ' video'}`}
               </button>
               <button className="secondary" onClick={reset} title="Reset"><RotateCcw size={18}/></button>
             </div>
 
-            {progress > 0 && <div className="progress"><strong style={{fontSize:13}}>{status}</strong><div className="progressbar"><div className="progressfill" style={{width:`${progress}%`}}/></div></div>}
             {error && <div className="error">{error}</div>}
 
-            {resultUrl && <div className="result">
-              <video src={resultUrl} controls playsInline/>
-              <div className="actions">
-                <a className="generate" href={resultUrl} download style={{textAlign:'center'}}><Download size={16} style={{verticalAlign:'middle',marginRight:7}}/>Download MP4</a>
-                <button className="secondary" onClick={reset}>Create new</button>
+            {jobs.length > 0 && <div className="batch-results">
+              <div className="batch-head"><h2>Batch progress</h2><span>{completed}/{jobs.length} completed</span></div>
+              <div className="job-grid">
+                {jobs.map(job => <div className="job-card" key={job.id}>
+                  <div className="job-title"><div><strong>{job.label}</strong><span>{job.videoName}</span></div>{job.status === 'done' ? <CheckCircle2 size={19}/> : job.status === 'error' ? <AlertCircle size={19}/> : <div className="job-spinner"/>}</div>
+                  <div className="job-status">{job.status === 'waiting' ? 'Waiting' : job.status === 'motion' ? 'Copying motion' : job.status === 'upscale' ? `Upscaling to ${resolution.toUpperCase()}` : job.status === 'done' ? 'Complete' : 'Failed'}</div>
+                  <div className="progressbar"><div className="progressfill" style={{width:`${job.progress}%`}}/></div>
+                  {job.error && <div className="job-error">{job.error}</div>}
+                  {job.resultUrl && <>
+                    <video className="job-video" src={job.resultUrl} controls playsInline/>
+                    <a className="download-btn" href={job.resultUrl} download><Download size={15}/> Download {resolution === '720p' ? '720p' : resolution.toUpperCase()}</a>
+                  </>}
+                </div>)}
               </div>
             </div>}
           </div>
 
-          <aside className="settings">
-            <h2>Generation settings</h2>
-            <div className="sectionlabel">Motion controls</div>
-            <div className="row"><div><strong>Adapt motion</strong><span>Retarget chuyển động theo tỷ lệ nhân vật</span></div><button className={`switch ${adaptMotion?'on':''}`} onClick={() => setAdaptMotion(v => !v)}><div className="knob"/></button></div>
-            <div className="row"><div><strong>Enhance identity</strong><span>Ưu tiên giữ mặt và đặc điểm nhân vật</span></div><button className={`switch ${enhanceIdentity?'on':''}`} onClick={() => setEnhanceIdentity(v => !v)}><div className="knob"/></button></div>
-            <div className="sectionlabel">Output</div>
-            <select className="select" value="720p" disabled><option value="720p">720p · Wan Motion optimized</option></select>
-            <p className="hint">Wan Motion nhận video làm driving motion, tự retarget pose và xuất video 720p.</p>
-            <div className="sectionlabel">Color system</div>
-            <div className="colors">
-              <div className="swatch" style={{background:'#070A12'}}>#070A12</div>
-              <div className="swatch" style={{background:'#7C5CFC'}}>#7C5CFC</div>
-              <div className="swatch" style={{background:'#2DD4FF',color:'#071019'}}>#2DD4FF</div>
-              <div className="swatch" style={{background:'#39E58C',color:'#071019'}}>#39E58C</div>
-            </div>
+          <aside className="settings compact-settings">
+            <h2>Generation</h2>
+            <div className="stat-card"><span>Motion mode</span><strong>Direct copy</strong></div>
+            <div className="stat-card"><span>Identity</span><strong>Enhanced</strong></div>
+            <div className="stat-card"><span>Batch</span><strong>Parallel</strong></div>
+            <div className="stat-card"><span>Output</span><strong>{resolution === '720p' ? '720p' : resolution.toUpperCase()}</strong></div>
           </aside>
         </section>
       </main>
